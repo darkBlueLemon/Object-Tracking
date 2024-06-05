@@ -12,14 +12,14 @@ results = {}
 mot_tracker = Sort()
 
 # load models
-# coco_model = YOLO('yolov8n.pt')
+# coco_model = YOLO('./models/yolov8n.pt')
 coco_model = YOLO('./models/yolov8x.pt')
 coco_model.to(device="mps")
 license_plate_detector = YOLO('./models/bestNew.pt')
 license_plate_detector.to(device="mps")
 
 # load video
-cap = cv2.VideoCapture('./videos/sample11.mp4')
+cap = cv2.VideoCapture('./videos/sample5.mp4')
 # cap = cv2.VideoCapture('./sample5r.mp4')
 # cap = cv2.VideoCapture(0)
 
@@ -28,17 +28,24 @@ vehicles = [2, 3, 5, 7]
 # vehicles = [0]
 
 # Define the horizontal segment
-y_start, y_end = 0.01, 0.99
+y_start, y_end = 0.3, 0.9
 _, frame = cap.read()
 y_start, y_end = int(frame.shape[0]*y_start), int(frame.shape[0]*y_end)
 x_start, x_end = 0, frame.shape[1]
+frame_width = frame.shape[1]
+
+y_line = int(frame.shape[1] * 0.2)  # Adjust this value to set the line position
 
 # Store previous positions and direction counts of tracked vehicles
 prev_positions = {}
 direction_counts = {}
-threshold_frames = 6  # Number of frames a vehicle must move in one direction
+threshold_frames = 10  # Number of frames a vehicle must move in one direction
 track_id_plate = {}
 track_id_entry_exit = {}
+track_id_wrong_side = {}
+
+# Left Hand Side Driving
+left_driving = True
 
 # read frames
 frame_nmr = -1
@@ -64,29 +71,17 @@ while ret:
                 y1 += y_start
                 y2 += y_start
                 detections_.append([x1, y1, x2, y2, score])
-        # # detect vehicles with no crop
-        # detections = coco_model(frame, verbose=False)[0]
-        # detections_ = []
-        # for detection in detections.boxes.data.tolist():
-        #     x1, y1, x2, y2, score, class_id = detection
-        #     # if int(class_id) in vehicles:
-        #         # detections_.append([x1, y1, x2, y2, score])
-        #     # if int(class_id) in vehicles and y_start <= y1 <= y_end and y_start <= y2 <= y_end:
-        #     #     detections_.append([x1, y1, x2, y2, score])
-        #     if (int(class_id) in vehicles) and (y_start <= (y2+y1)/2 <= y_end):
-        #         detections_.append([x1, y1, x2, y2, score])
 
         # convert detections_ to a NumPy array
         detections_ = np.asarray(detections_)
 
-        # check if detections_ is empty before updating the tracker
+        # check if detections_ is empty before EXITdating the tracker
         if detections_.shape[0] > 0:
             # Filter out detections with NaN values
             # detections_ = detections_[~np.isnan(detections_).any(axis=1)]
             # track vehicles
             track_ids = mot_tracker.update(detections_)
 
-            # draw vehicle boxes
             # draw vehicle boxes
             for track in track_ids:
                 x1, y1, x2, y2, track_id = track
@@ -98,11 +93,11 @@ while ret:
                     if track_id in prev_positions:
                         prev_center_x, prev_center_y = prev_positions[track_id]
                         if center_y < prev_center_y:
-                            direction = 'up'
+                            direction = 'EXIT'
                         else:
-                            direction = 'down'
+                            direction = 'ENTRY'
 
-                        # Update direction counts
+                        # EXITdate direction counts
                         if track_id in direction_counts:
                             last_direction, count = direction_counts[track_id]
                             if direction == last_direction:
@@ -115,81 +110,92 @@ while ret:
                         direction = None
                         direction_counts[track_id] = (None, 0)
 
+                    # EXITdate previous positions
+                    prev_positions[track_id] = (center_x, center_y)
+
+
+                    # COLORS
+
                     # Determine color based on direction and count
                     color = (255, 255, 255)  # White for the first frame
                     if direction is not None:
                         last_direction, count = direction_counts[track_id]
                         if count >= threshold_frames:
-                            if last_direction == 'down':
+                            if last_direction == 'ENTRY':
                                 color = (0, 255, 0)  # Green for moving away
-                            elif last_direction == 'up':
+                                cv2.putText(frame, f'ID: {int(track_id)} ENTRY', (int(x1), int(y1)-10), cv2.FONT_HERSHEY_SIMPLEX, 1, color, 2)
+                            elif last_direction == 'EXIT':
                                 color = (0, 0, 255)  # Red for coming towards
+                                cv2.putText(frame, f'ID: {int(track_id)} EXIT', (int(x1), int(y1)-10), cv2.FONT_HERSHEY_SIMPLEX, 1, color, 2)
 
-                    # Update previous positions
-                    prev_positions[track_id] = (center_x, center_y)
+                            # adding car id with entry/exit to car_id_extry_exit
+                            if track_id in track_id_plate:
+                                track_id_entry_exit[track_id] = {track_id_plate[track_id], last_direction}
+
+                            # Comment for normal use
+                            color = (255, 255, 255)
+                            if left_driving:
+                                cv2.putText(frame, 'ENTRY', (int(y_line), int(y_end)-10), cv2.FONT_HERSHEY_SIMPLEX, 1, (255,255,255), 2)
+                                cv2.putText(frame, 'EXIT', (int(0), int(y_end)-10), cv2.FONT_HERSHEY_SIMPLEX, 1, (255,255,255), 2)
+                                if (center_x < y_line and last_direction == 'ENTRY') or (center_x > y_line and last_direction == 'EXIT'):
+                                    color = (0, 0, 255)
+                                    # adding car id with wrong side 
+                                    if track_id in track_id_plate:
+                                        track_id_wrong_side[track_id] = {track_id_plate[track_id], last_direction}
+                            else:
+                                cv2.putText(frame, 'EXIT', (int(y_line), int(y_end)-10), cv2.FONT_HERSHEY_SIMPLEX, 1, (255,255,255), 2)
+                                cv2.putText(frame, 'ENTRY', (int(0), int(y_end)-10), cv2.FONT_HERSHEY_SIMPLEX, 1, (255,255,255), 2)
+                                if (center_x < y_line and last_direction == 'EXIT') or (center_x > y_line and last_direction == 'ENTRY'):
+                                    color = (0, 0, 255)
+                                    # adding car id with wrong side 
+                                    if track_id in track_id_plate:
+                                        track_id_wrong_side[track_id] = {track_id_plate[track_id], last_direction}
 
                     # Draw the bounding box and center point
                     cv2.rectangle(frame, (int(x1), int(y1)), (int(x2), int(y2)), color, 5)
 
-                    # # save face
-                    # output_path = f"./croppedFaces/cropped_face_{track_id}.jpg"
-                    # cv2.imwrite(output_path, frame[int(y1):int(y2), int(x1): int(x2), :])
+            # detect license plates
+            license_plates = license_plate_detector(frame, verbose=False)[0]
+            for license_plate in license_plates.boxes.data.tolist():
+                x1, y1, x2, y2, score, class_id = license_plate
 
-                    # cv2.putText(frame, f'ID: {int(track_id)}', (int(x1), int(y1)-10), cv2.FONT_HERSHEY_SIMPLEX, 1, color, 2)
-                    action = -1
-                    if color == (0, 255, 0):
-                        action = "ENTRY"
-                        cv2.putText(frame, f'ID: {int(track_id)} ENTRY', (int(x1), int(y1)-10), cv2.FONT_HERSHEY_SIMPLEX, 1, color, 2)
-                    elif color == (0, 0, 255):
-                        action = "EXIT"
-                        cv2.putText(frame, f'ID: {int(track_id)} EXIT', (int(x1), int(y1)-10), cv2.FONT_HERSHEY_SIMPLEX, 1, color, 2)
-                    cv2.circle(frame, (int(center_x), int(center_y)), radius=10, color=color, thickness=2)
+                # assign license plate to car
+                xcar1, ycar1, xcar2, ycar2, car_id = get_car(license_plate, track_ids)
 
-                    # adding car id with entry/exit to car_id_extry_exit
-                    if track_id in track_id_plate and action:
-                        track_id_entry_exit[track_id] = {track_id_plate[track_id], action}
-            
-            # # detect license plates
-            # license_plates = license_plate_detector(frame, verbose=False)[0]
-            # for license_plate in license_plates.boxes.data.tolist():
-            #     x1, y1, x2, y2, score, class_id = license_plate
+                if car_id != -1:
+                    # crop license plate
+                    license_plate_crop = frame[int(y1):int(y2), int(x1): int(x2), :]
+                    if license_plate_crop.size == 0:
+                        continue
 
-            #     # assign license plate to car
-            #     xcar1, ycar1, xcar2, ycar2, car_id = get_car(license_plate, track_ids)
+                    # process license plate
+                    license_plate_crop_gray = cv2.cvtColor(license_plate_crop, cv2.COLOR_BGR2GRAY)
+                    _, license_plate_crop_thresh = cv2.threshold(license_plate_crop_gray, 64, 255, cv2.THRESH_BINARY_INV)
 
-            #     if car_id != -1:
-            #         # crop license plate
-            #         license_plate_crop = frame[int(y1):int(y2), int(x1): int(x2), :]
-            #         if license_plate_crop.size == 0:
-            #             continue
+                    # read license plate number
+                    license_plate_text, license_plate_text_score = read_license_plate(license_plate_crop_thresh)
 
-            #         # process license plate
-            #         license_plate_crop_gray = cv2.cvtColor(license_plate_crop, cv2.COLOR_BGR2GRAY)
-            #         _, license_plate_crop_thresh = cv2.threshold(license_plate_crop_gray, 64, 255, cv2.THRESH_BINARY_INV)
+                    cv2.rectangle(frame, (int(x1), int(y1)), (int(x2), int(y2)), (255, 255, 255), 10)
+                    # cv2.putText(frame, license_plate_text, (int(x1), int(y1)-10), cv2.FONT_HERSHEY_SIMPLEX, 10, (255, 0, 0), 10)
+                    if license_plate_text is not None:
+                        results[frame_nmr][car_id] = {'car': {'bbox': [xcar1, ycar1, xcar2, ycar2]},
+                                                    'license_plate': {'bbox': [x1, y1, x2, y2],
+                                                                        'text': license_plate_text,
+                                                                        'bbox_score': score,
+                                                                        'text_score': license_plate_text_score},
+                        }
 
-            #         # read license plate number
-            #         license_plate_text, license_plate_text_score = read_license_plate(license_plate_crop_thresh)
-
-            #         cv2.rectangle(frame, (int(x1), int(y1)), (int(x2), int(y2)), (255, 255, 255), 10)
-            #         # cv2.putText(frame, license_plate_text, (int(x1), int(y1)-10), cv2.FONT_HERSHEY_SIMPLEX, 10, (255, 0, 0), 10)
-            #         if license_plate_text is not None:
-            #             results[frame_nmr][car_id] = {'car': {'bbox': [xcar1, ycar1, xcar2, ycar2]},
-            #                                         'license_plate': {'bbox': [x1, y1, x2, y2],
-            #                                                             'text': license_plate_text,
-            #                                                             'bbox_score': score,
-            #                                                             'text_score': license_plate_text_score},
-            #             }
-
-            #             track_id_plate[car_id] = license_plate_text
+                        track_id_plate[car_id] = license_plate_text
                         
-            #             # draw license plate box
-            #             cv2.rectangle(frame, (int(x1), int(y1)), (int(x2), int(y2)), (255, 0, 0), 2)
-            #             cv2.putText(frame, license_plate_text, (int(x1), int(y1)-10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 2)
+                        # draw license plate box
+                        cv2.rectangle(frame, (int(x1), int(y1)), (int(x2), int(y2)), (255, 0, 0), 2)
+                        cv2.putText(frame, license_plate_text, (int(x1), int(y1)-10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 2)
                 
 
         # draw bouding lines
         cv2.line(frame, (x_start, y_start), (x_end, y_start), (0, 255, 0), 2)
         cv2.line(frame, (x_start, y_end), (x_end, y_end), (0, 255, 0), 2)
+        cv2.line(frame, (y_line, y_start), (y_line, y_end), (0, 255, 0), 2)
 
         # display the frame with boxes
         cv2.imshow('Frame', frame)
